@@ -1,0 +1,229 @@
+*********display 안되면
+export DISPLAY=":0.0"
+
+1. 가상환경 만들기
+-> 
+conda create -n mm python=3.7 -y
+conda activate mm
+conda install pytorch==1.6.0 torchvision==0.7.0 cudatoolkit=10.2 -c pytorch -y
+pip install mmcv-full==1.3.5 -f https://download.openmmlab.com/mmcv/dist/cu102/torch1.6.0/index.html
+
+python = 3.7 pytorch==1.6.0 torchvision==0.7.0 cudatoolkit=10.2 mmcv-full==1.3.5
+
+2.mmdetection 다운 install
+git clone -b v2.13.0 https://github.com/open-mmlab/mmdetection.git
+cd mmdetection
+pip install -r requirements/build.txt
+pip install -v -e .
+
+*******여기까지 설치가 잘 됐다면 확인할 수 있는것*******
+tools/model.py -> 설치 확인할 수 있는 코드
+config, checkpoint 파일들 다 다운받아야함.
+설치가 잘 됐다면 python tools/model.py -> 예제 사진이 잘 뜬ㄷㅏ !
+
+
+3.이미지 준비 (Scar 기준)
+train : test : val = 6 : 2 : 2 = 476 : 158 : 158
+ls -l | grep ^- | wc -l (현위치 파일 갯수 세는 명령어)
+python tools/shuffle.py -> shuffle하여 6:2:2로 나눔
+-> python tools/shuffle.py test(or val)
+
+****labelme 사용****
+-> conda create -n label python=3.7 -y
+(labelme와 mmdetection 함께 사용 x)
+conda activate label
+conda install labelme
+labelme -> 바로 실행
+1 anotation -> 1 save
+
+****vgg 사용****
+https://www.robots.ox.ac.uk/~vgg/software/via/via-2.0.10.html
+Add files -> 이미지 다 들고오기
+Attributes에서 Region Attributes - list 이름정하고 + 클릭 - Type dropdown으로 - id, description 정하기 description = Scar
+쭉 다하면 Anotation 탭의 Export Anotations (COCO format)
+
+
+4.labelme to COCO 
+ ----------------------------------------------------------------------------
+|mmdetection coco format 사용, labelme json -> coco 필요                     |
+|*train,test,val 폴더에 각 6:2:2로 나눠져있음                                |
+|python tools/labelme2coco.py configs/_base_/scar3/val --output val.json     |
+|-> 이 파일은 anotation된 이미지 이용으로 이미지 경로 바꿔줘야함             |
+ ----------------------------------------------------------------------------
+
+******tools/labelme2coco2 사용******
+-> labelme2coco 는 학습은 되지만 test할때 저장이 겹쳐짐
+so labelme2coco2 사용하여 json 파일 생성하여 사용해야함 -> labelme2coco2 수정 내용이 많으니 꼭 tools/labelme2coco2 사용할것
+사용법 -> 
+labels.txt 제작 -> __ignore__ 빼면 오류. 없더라도 __ignore__ 넣어주고 다음에 label 적기
+python tools/labelme2coco2.py /data/yunjin/last/mmdetection/configs/_base_/scar3/val --labels tools/labels.txt 
+*******************************************************************************************
+5. model 만들기
+모델 만드는 툴 -> mask.py 와 같은 형식으로 제작 (openmmlab에서 가져옴)
+**바꿀내용**
+- classes = scar, 경로 바꾸기, num classes =1,
+    load_form = 공홈에서 다운받아서 쓰기, condor로 돌리면 time error 뜸
+- /data/yunjin/last/mmdetection/mmdet/datasets/coco.py -> CLASSES = ('scar') 로 바꾸기,
+- /data/yunjin/last/mmdetection/configs/_base_/default_runtime.py -> checkpoint_config = dict(interval=500) interval 만큼 지나면 저장, 
+- /data/yunjin/last/mmdetection/configs/_base_/schedules/schedule_1x.py -> running late 등등 변경 가능, total_epoch 설정
+- /data/yunjin/last/mmdetection/configs/_base_/datasets/coco_instance.py ->     #batchsize
+    samples_per_gpu=2,
+    workers_per_gpu=2, 배치사이즈 변경
+- 
+
+
+6. train 하기
+scar3 -> maskrcnn 1x caffe train.sh ->python /data/yunjin/last/mmdetection/tools/train.py /data/yunjin/last/mmdetection/configs/_base_/scar3/mask_1x_caffe.py
+./condor.sh mask -> 학습마다 이름 바꿈
+err 파일에 log가 뜬다.
+
+
+7.test 하기
+모든 학습 내용 work_dirs/python이름 에 저장 -> 마지막 checkpoint = latest.pth
+python tools/test.py config/_base_/scar3/mask_1x_caffe.py work_dirs/mask_1x_caffe/latest.pth --show-dir 경로
+하면 경로에 test 사진 저장
+
+8.pkl 파일 얻기
+./tools/dist_test.sh configs/_base_/scar_mask_pytorch/mask_1x_pytorch.py configs/_base_/scar_mask_pytorch/work_dirs/mask_1x_pytorch/latest.pth 1 --out resultspy.pkl --eval bbox segm
+
+9.pkl로 test해서 good bad 나누기
+python tools/analysis_tools/analyze_results.py configs/_base_/scar3/mask_1x_caffe4.py result4.pkl result/pkl --show
+
+10.result json 파일 얻기
+python tools/test.py configs/_base_/scar3/mask_1x_caffe4.py configs/_base_/scar3/work_dirs/mask_1x_caffe4/latest.pth --format-only --options "jsonfile_prefix=./results"
+
+11.mask 면적 비율, mask 흑백 데이터 얻기
+python tools/area.py configs/_base_/scar3/test/ configs/_base_/re/mask_1x_caffe4.py configs/_base_/re/work_dirs/mask_1x_caffe4/latest.pth
+->> args 순서대로 test사진 경로/config파일 경로/checkpoint파일 경로
+++++++++++++++++++++++++++++++++++++++++++++++++
+7-11까지 일괄적 test -> test.sh 파일 이름만 바꿔서
+
+mmdetection에서
+./testcondor.sh jobname
+-> jobname.out 에서 recall 값, map, mask 면적 비율 등 알 수 있음.
+++++++++++++++++++++++++++++++++++++++++++++++++
+
+12. annotation mask 구하기
+python tools/answer_mask.py /data/yunjin/last/mmdetection/totalimg/select(annotation 사진) --labels tools/labels.txt 
+
+
+## image bbox color change
+-> /mmdet/core/visualization/image.py -> 197 line -> good bad image bbox (BGR순서)
+
+
+
+
+
+-------------------------------------------------------------------------------------------------
+
+salmon length 사용법
+
+최종본 = salmontest.py
+테스터 = onefile_length.py
+
+python salmontest.py /data/yunjin/last/salmon/img/last/ /data/yunjin/last/mmdetection/configs/_base_/salmon/mask_1x_salmon_r50_dataset2.py /data/yunjin/last/mmdetection/configs/_base_/salmon/work_dirs/mask_1x_salmon_r50_dataset2/epoch_600.pth
+python onefile_length.py
+
+
+---------------------------------------------------------------------------------------------------
+1) scar3 -> mask2
+- MaskRCNN
+- resnet50_caffe
+- fpn mstrain
+- 1x lr=0.002, momentum=0.9, weight_decay=0.0001
+- batchsize = 1
+- total_epoch = 5000
+- latest = 2021-06-29 11:45:53,487 - mmdet - INFO - Epoch [1625][200/238]	lr: 2.000e-05, eta: 1 day, 1:25:26, time: 0.123, data_time: 0.004, memory: 3784, loss_rpn_cls: 0.0003, loss_rpn_bbox: 0.0021, loss_cls: 0.0063, acc: 99.7461, loss_bbox: 0.0129, loss_mask: 0.0422, loss: 0.0638
+# optimizer
+optimizer = dict(type='SGD', lr=0.002, momentum=0.9, weight_decay=0.0001)
+optimizer_config = dict(grad_clip=None)
+# learning policy
+lr_config = dict(
+    policy='step',
+    warmup='linear',
+    warmup_iters=5000,
+    warmup_ratio=0.001,
+    step=[8, 11])
+total_epochs = 5000
+
+2.scar3->mask_1x_caffe2
+# optimizer
+optimizer = dict(type='SGD', lr=0.0025, momentum=0.9, weight_decay=0.0001)
+optimizer_config = dict(grad_clip=None)
+# learning policy
+lr_config = dict(
+    policy='step',
+    warmup='linear',
+    warmup_iters=5000,
+    warmup_ratio=0.001,
+    step=[8, 11])
+total_epochs = 1000
+->labelme2coco2로 json 만들어서 학습 및 테스트
+2021-06-30 04:18:16,204 - mmdet - INFO - Epoch [1000][200/238]	lr: 2.500e-05, eta: 0:00:04, time: 0.121, data_time: 0.004, memory: 3038, loss_rpn_cls: 0.0009, loss_rpn_bbox: 0.0022, loss_cls: 0.0063, acc: 99.7578, loss_bbox: 0.0156, loss_mask: 0.0499, loss: 0.0748
+-> 학습, 저장 다 잘됨. but lr 값이 너무 작고 느리다 -> 총 학습시간 7시간(1000)
+-> epoch 22 부터 lr: 2.500e-05 고정
+
+
+3.scar3->mask_1x_caffe3
+# optimizer
+optimizer = dict(type='SGD', lr=0.0025, momentum=0.9, weight_decay=0.0001)
+optimizer_config = dict(grad_clip=None)
+# learning policy
+lr_config = dict(
+    policy='step',
+    gamma=0.2,
+    warmup='linear',
+    warmup_iters=5000,
+    warmup_ratio=0.001,
+    
+    step=[8, 16])
+total_epochs = 1000
+-> version2 + gamma 추가, lr 감소 속도 느림, step -> 11-16으로 변경 -> 감소되는 epoch 순간 느려짐
+-> epoch 22부터 lr: 1.000e-04
+
+
+4.scar3->mask_1x_caffe4
+# optimizer
+optimizer = dict(type='SGD', lr=0.0025, momentum=0.9, weight_decay=0.0001)
+optimizer_config = dict(grad_clip=None)
+# learning policy
+lr_config = dict(
+    policy='step',
+    warmup='linear',
+    warmup_iters=5000,
+    warmup_ratio=0.001,
+    min_lr=0.0025,
+    step=[8, 16])
+total_epochs = 1000
+-> version2 + min_lr 설정
+-> epoch 22부터 lr: 2.500e-03
+
+5.mask_1x_pytorch
+->mask_1x_pytorchre.py 사용 
+not caffe pytorch로 사용
+schedule_1x -> lr 변경해둠
+
+6.mask_1x_r101
+-> resnet depth = 101 으로 변경
+
+7.mask_1x_x101
+-> backbone 변경
+
+
+
+------------------------------------------------------------------------------------------------------
+
+mask_1x_caffe4
+Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.616
+ Average Precision  (AP) @[ IoU=0.50      | area=   all | maxDets=1000 ] = 0.963
+ Average Precision  (AP) @[ IoU=0.75      | area=   all | maxDets=1000 ] = 0.776
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= small | maxDets=1000 ] = -1.000
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area=medium | maxDets=1000 ] = -1.000
+ Average Precision  (AP) @[ IoU=0.50:0.95 | area= large | maxDets=1000 ] = 0.616
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = 0.678
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=300 ] = 0.678
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=   all | maxDets=1000 ] = 0.678
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= small | maxDets=1000 ] = -1.000
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area=medium | maxDets=1000 ] = -1.000
+ Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=1000 ] = 0.678
+OrderedDict([('bbox_mAP', 0.515), ('bbox_mAP_50', 0.902), ('bbox_mAP_75', 0.544), ('bbox_mAP_s', -1.0), ('bbox_mAP_m', -1.0), ('bbox_mAP_l', 0.515), ('bbox_mAP_copypaste', '0.515 0.902 0.544 -1.000 -1.000 0.515'), ('segm_mAP', 0.616), ('segm_mAP_50', 0.963), ('segm_mAP_75', 0.776), ('segm_mAP_s', -1.0), ('segm_mAP_m', -1.0), ('segm_mAP_l', 0.616), ('segm_mAP_copypaste', '0.616 0.963 0.776 -1.000 -1.000 0.616')])
