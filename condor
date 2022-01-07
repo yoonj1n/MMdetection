@@ -1,0 +1,15 @@
+# This it test to repeat ruler4 (/data/myunggi/2020/fira/tf/workspace/ruler4)
+
+# images with ruler(removed for train) and child34
+
+# Order 
+0. images and xml (annotation) files in /data/myunggi/2020/fira/tf/workspace/ruler4/images/train/ and goto images/ diretory,
+1. preprocess.sh
+2. train.sh
+3. export.sh
+4. test.sh
+
+
+# Benchmark for ML
+the more memory, the faster ML runs (#of cpus doesn't matter)
+
